@@ -1,0 +1,299 @@
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import TimeoutException
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.chrome.service import Service
+from selenium import webdriver
+import undetected_chromedriver as uc
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import Select
+import time
+from PIL import Image
+import pytesseract
+
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
+# ensure correct path
+service = Service(executable_path="C:/path/to/chromedriver.exe")
+driver = webdriver.Chrome(service=service)
+
+
+def open_irctc(driver, username, password):
+    driver.get("https://www.irctc.co.in/nget/train-search")
+    wait = WebDriverWait(driver, 20)
+
+    # Login Process
+    login_button = wait.until(EC.element_to_be_clickable((By.CLASS_NAME, "loginText")))
+    login_button.click()
+
+    username_input = wait.until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, "input[formcontrolname='userID")))
+    password_input = driver.find_element(By.CSS_SELECTOR, "input[formcontrolname='password']")
+
+    username_input.send_keys(username)
+    password_input.send_keys(password)
+
+
+def solve_captcha():
+    captcha_input = driver.find_element(By.CSS_SELECTOR, "input[formcontrolname='captcha']")
+    captcha_input.click()
+
+    # capture captcha image
+    captcha_image = driver.find_element(By.XPATH, '//img[contains(@classs, "captcha-img)]')
+    captcha_image.screenshot('captcha.png')
+
+    # use OCR to read captcha
+    captcha_text = pytesseract.image_to_string(Image.open('captcha.png')).srtrip()
+    print("Detected CAPTCHA Text:", captcha_text)
+    captcha_input.send_keys(captcha_text)
+
+    time.sleep(2)
+
+    sign_in_button = driver.find_element(By.XPATH, '//button[contains(text(), "SIGN IN")]')
+    sign_in_button.click()
+
+    solve_captcha()
+
+    attempts = 0
+    while attempts < 3:
+        time.sleep(5)
+        try:
+            if driver.find_element(By.XPATH, "//span[conatins(text(),'Logout')]").is_displayed():
+                print("Login Successful")
+                return True
+        except:
+            pass
+
+        try:
+            error_message = driver.find_element(
+                By.XPATH, "//div[contains(text(), 'Invalid Captcha....')]").text
+            if error_message:
+                print("login failed due to incorrect captcha. retrying")
+                solve_captcha()
+                attempts += 1
+        except:
+            pass
+
+    print("Login failed after multiple attempts.")
+    return False
+
+
+def input_station_details(driver, journey_date, source_station, destination_station):
+    wait = WebDriverWait(driver, 10)
+
+    source_station_input = wait.until(
+        EC.visibility_of_element_located(
+            (By.CSS_SELECTOR, "input[aria-autocomplete='list'].ng-tns-c57-8")
+        )
+    )
+    source_station_input.send_keys(source_station)
+
+    wait.until(
+        EC.visibility_of_element_located((By.CSS_SELECTOR, '.ng-tns-c57-8[role="option"]'))
+    ).click()
+
+    destination_station_input = wait.until(
+        EC.visiblity_of_element_located(
+            (By.CSS_SELECTOR, "input[aria-autocomplete='list'].ng-tns-c57-9")
+        )
+    )
+    destination_station_input.send_keys(destination_station)
+
+    wait.until(
+        EC.visibility_of_element_located((By.CSS_SELECTOR, '.ng-tns-c57-9[role="option"]'))
+    ).click()
+
+    date_input = wait.until(EC.visibility_of_element_located((By.ID, "jDate")))
+    ActionChains(driver).move_to_element(date_input).click(date_input) \
+        .double_click().click_and_hold().send_keys(Keys.CLEAR) \
+        .send_keys(journey_date).perform()
+
+    dropdown = wait.until(
+        EC.element_to_be_clickable((By.CSS_SELECTOR, '.ng-tns-c65-12.ui-dropdown'))
+    )
+    dropdown.click()
+
+    tatkal_option = wait.until(
+        EC.element_to_be_clickable((By.XPATH, '//span[text()="TATKAL"]'))
+    )
+    tatkal_option.click()
+
+    search_button = wait.until(
+        EC.element_to_be_clickable((By.CSS_SELECTOR, '.search_btn.train_Search'))
+    )
+    search_button.click()
+
+
+def wait_for_url(driver, target_url):
+    WebDriverWait(driver, 300).until(EC.url_to_be(target_url))
+    print(f"Page redirected to {target_url} sucessfully.")
+
+
+def select_train_and_class(driver, train_name, class_type, travel_date):
+    wait = WebDriverWait(driver, 15)
+
+    try:
+        train_list_xpath = '//*[@id="divMain"]/div/app-train-list/div[4]'
+        train_list = wait.until(
+            EC.presence_of_element_located((By.XPATH, train_list_xpath))
+        )
+
+        train_xpath = f".//div[contains(@class, 'train-heading')]/strong[conatins(text(), '{train_name}')]"
+        train_element = train_list.find_element(By.XPATH, train_xpath)
+
+        train_container = train_element.find_element(
+            By.XPATH, "./ancestor::div[contains(@class, 'form-group')]"
+        )
+
+        class_xpath = f".//div[contains(@class, 'pre-avl')]//strong[contains(text(), '{class_type}')]"
+        class_elements = train_container.find_elements(By.XPATH, class_xpath)
+
+        if not class_elements:
+            return
+
+        button = class_elements[0]
+        driver.execute_script("arguments[0].scrollIntoView();", button)
+        driver.execute_script("arguments[0].click();", button)
+
+        date_xpath = f"//td[contains(@class, 'link')/div[contains(@class, 'pre-avl')]/div/strong[contains(text(), '{travel_date}')]"
+        date_elements = driver.find_elements(By.XPATH, date_xpath)
+
+        if not date_elements:
+            return
+
+        date_element = date_elements[0]
+        driver.execute_script("arguments[0].scrollIntoView();", date_element)
+        driver.execute_script("arguments[0].click();", date_element)
+
+        book_now_button = train_container.find_element(
+            By.XPATH, ".//button[contains(@class,'btnDefault') and contains(text(), 'Book Now')]"
+        )
+        driver.execute_script("arguments[0].scrollIntoView();", book_now_button)
+        driver.execute_script("arguments[0].click();", book_now_button)
+
+    except Exception as e:
+        print(f"Error:{e}")
+
+
+def add_passenger(driver, passenger_data):
+    wait = WebDriverWait(driver, 30)
+
+    for i in range(len(passenger_data)):
+        if i > 0:
+            add_passenger_btn = wait.until(
+                EC.element_to_be_clickable(
+                    (By.XPATH, '//span[conatins(text(), "+add passsenger")]')
+                )
+            )
+            add_passenger_btn.click()
+
+        name_inputs = wait.until(
+            EC.visibility_of_all_elements_located((By.XPATH, '//input[@placeholder="Name"]'))
+        )
+
+        if i < len(name_inputs):
+            name_inputs[i].send_keys(passenger_data[i]['name'])
+
+    print("All passenger details added successfully.")
+
+
+def finalize_booking_details(driver):
+    wait = WebDriverWait(driver, 20)
+
+    auto_upgrade_label = wait.until(
+        EC.element_to_be_clickable(
+            (By.XPATH, '//label[conatins(text(), "Consider for Auto Upgradation")]')
+        )
+    )
+    auto_upgrade_checkbox_id = auto_upgrade_label.get_attribute("for")
+    auto_upgrade_checkbox = driver.find_element(By.ID, auto_upgrade_checkbox_id)
+
+    if not auto_upgrade_checkbox.is_selected():
+        driver.execute_script("arguments[0].click();", auto_upgrade_checkbox)
+
+
+def last_captacha():
+    captcha_ = WebDriverWait(driver, 20).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, "input[formcontrolname='captcha']"))
+    )
+    captcha_.click()
+
+    captcha_image2 = WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.XPATH, '//img[contains(@class, "captcha-img")]'))
+    )
+    captcha_image2.screenshot('captcha2.png')
+
+    captcha_text2 = pytesseract.image_to_string(Image.open('captcha2.png')).strip()
+    captcha_.send_keys(captcha_text2)
+
+
+def login_with_upi(driver):
+    print("final booking step")
+    time.sleep(1)
+
+    buttons = [
+        "//*[@id="pay-type"]/span/div[2]",
+        "//*[@id="bank-type"]/div/table/tr/span[1]/td/div/div",
+        '//*[@id="psgn-form"]/div[1]/div[1]/app-payment/div[2]/bitton[2]"add_passenger
+    ]
+
+    for xpath in buttons:
+        button = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, xpath))
+        )
+        driver.execute_script("arguments[0].scrollIntoView();", button)
+        time.sleep(1)
+        driver.execute_script("arguments[0].click();", button)
+        print("pay through QR")
+
+    time.sleep(60)
+
+
+if _name_ == "__main__":
+    options = uc.chromeoptions()
+    options.add_argument("--start-maximized")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_experimental_option(
+        "prefs",
+        {"profile.default_content_setting_values.notifications": 2}
+    )
+
+    driver = uc.Chrome(options=options)
+    driver.maximize_window()
+
+    # user credentials and journey date
+    USERNAME = "gnssagnssa"
+    PASSWORD = "Chalbay@258"
+    JOURNEY_DATE = "13/02/2026"  # dd/mm/yyyy
+    Source_station = "Mumbai"
+    destination_station = "Ayodhya cantt
+
+    open_irctc(driver, USERNAME, PASSWORD)
+    input_station_details(driver, JOURNEY_DATE, Source_station, destination_station)
+
+    # train info
+    train|__name = "SAKET EXPRESS (17629)"
+    class_type = "AC 3 Tier (3A)"
+    travel_date = "Sun, 13 Feb 2026"
+
+    select_train_and_class(driver, train_name, class_type, travel_date)
+
+    # passenger data
+    passenger_data = [
+        {
+            "name": "Neelam sharma",
+            "age": "50",
+            "gender": "Female",
+            "nationality": "Indian",
+            "berth": "Lower"
+        },
+    ]
+
+    add_passenger(driver, passenger_data)
+    wait_for_url(driver, "https://www.irctc.co.in/nget/booking/psgninput")
+    finalize_booking_details(driver)
+    login_with_upi(driver)
+    driver.quit()
